@@ -36,4 +36,9 @@ to redact or tokenise sensitive fields before LLM processing.
 
 ---
 
-*This document will be updated as the project evolves toward a production path.*
+## Dependency License Audit
+
+All third-party dependencies have been audited via pip-licenses. No GPL
+licenses detected. One LGPL dependency (pybars4) is present as a
+dynamically imported library — accepted under standard Python LGPL
+interpretation. Full attributions in ThirdPartyLicenses.txt.
