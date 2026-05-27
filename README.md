@@ -135,7 +135,7 @@ Prompt engineering and domain-specific underwriting logic are withheld from the 
 
 ## Legal and Compliance
 
-This project is released under the [MIT License](LICENSE).
+This project is released under the [PolyForm Noncommercial 1.0.0 License](LICENSE).
 
 See [DISCLAIMER.md](DISCLAIMER.md) for intended use and scope.
 
