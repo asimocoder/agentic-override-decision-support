@@ -133,4 +133,14 @@ Prompt engineering and domain-specific underwriting logic are withheld from the 
 
 ---
 
+## Legal and Compliance
+
+This project is released under the [MIT License](LICENSE).
+
+See [DISCLAIMER.md](DISCLAIMER.md) for intended use and scope.
+
+See [COMPLIANCE_GAPS.md](COMPLIANCE_GAPS.md) for known gaps relevant to production deployment in an Indian regulatory context.
+
+---
+
 *Built by Asiman Kumar Panda · [linkedin.com/in/asiman-panda](https://linkedin.com/in/asiman-panda)*
