@@ -1,0 +1,13 @@
+anthropic
+openai
+langchain-anthropic
+langchain-openai
+langchain-core
+langgraph
+tavily-python
+gradio
+pydantic
+pandas
+openpyxl
+python-dotenv
+ipython
