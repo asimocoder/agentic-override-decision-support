@@ -1,6 +1,8 @@
 # Agentic Override Decision Support System
 ### MSME Credit Underwriting · Human-in-the-Loop AI
 
+> ⚠️ This project is licensed under [PolyForm Noncommercial 1.0.0](LICENSE). Commercial use requires explicit written permission from the author.
+
 ---
 
 ## The Problem
