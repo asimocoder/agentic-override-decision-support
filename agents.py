@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import TypedDict, Annotated, List, Dict, Any, Optional, Literal
 from pydantic import BaseModel, Field
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -55,6 +56,9 @@ class State(TypedDict):
     director_names: Optional[List[str]]
     related_companies: Optional[List[str]]
     go_nogo: Optional[GoNoGo]
+    entity_mapping: Optional[Dict[str, str]]  # real_name -> placeholder, e.g. "Rajesh Sharma" -> "PERSON_1"
+                                               # populated by DataIngestor, consumed by entity_restorer
+    pii_warnings: Optional[List[str]]          # PII detected in uploaded file that should have been stripped
 
 
 researcher_tools = [news_search, court_search, industry_outlook] 
@@ -75,14 +79,14 @@ class Analyst:
             data = sheet_info["data"]
             data_sections += f"\n\n### {category.upper()} (Sheet: {sheet_name})\n"
             data_sections += json.dumps(data, indent=2)
-
+        
         # SYSTEM PROMPT REDACTED
         # Analyst system prompt instructs the LLM to perform financial anomaly detection
         # and bureau signal interpretation over CRAN data, and extract director names
         # and related companies for downstream research. Loaded from config in production.
         system_message = ""
 
-        user_message = f"""Here is the CRAN data:\n{data_sections}"""
+                user_message = f"""Here is the CRAN data:\n{data_sections}"""
 
         messages = [
             SystemMessage(content=system_message),
@@ -106,15 +110,29 @@ class Researcher:
         self.llm_2_with_tools = self.llm_2.bind_tools(researcher_tools)
 
     def extract_go_nogo(self, response) -> GoNoGo:
+        if not isinstance(response.content, str):
+            logging.warning(
+                "extract_go_nogo: response.content is not a string (got %s), defaulting to NEEDSMORE",
+                type(response.content)
+            )
+            return GoNoGo.NEEDSMORE
         content = response.content.upper()
         if "RECOMMENDED STANCE: NOGO" in content:
             return GoNoGo.NOGO
-        elif "RECOMMENDED STANCE: NEEDS FURTHER RESEARCH" in content:
+        elif (
+            "RECOMMENDED STANCE: NEEDS FURTHER RESEARCH" in content
+            or "RECOMMENDED STANCE: NEED FURTHER RESEARCH" in content
+            or "RECOMMENDED STANCE: NEEDS MORE RESEARCH" in content
+        ):
             return GoNoGo.NEEDSMORE
         elif "RECOMMENDED STANCE: GO" in content:
             return GoNoGo.GO
         else:
-            return GoNoGo.NEEDSMORE  # safe default if parsing fails
+            logging.warning(
+                "extract_go_nogo: no stance line found in response, defaulting to NEEDSMORE. Content tail: %r",
+                response.content[-300:]
+            )
+            return GoNoGo.NEEDSMORE
 
     def researcher(self, state):
         company_name = state["company_name"]
@@ -167,7 +185,7 @@ class Researcher:
         # Loaded from config in production.
         system_message = ""
 
-        user_message = f"""SEARCH AGENDA — complete every item before synthesising:
+                user_message = f"""SEARCH AGENDA — complete every item before synthesising:
         {search_agenda}
 
         FINANCIAL ANOMALIES FLAGGED BY ANALYST:

@@ -28,11 +28,50 @@ is maintained across sessions. A production deployment would require a persisten
 audit trail with case ID linkage, in line with RBI outsourcing and IT framework
 guidelines.
 
-## No PII Masking Layer
+## Privacy Boundary — Known Gaps
 
-No PII masking or redaction layer is applied before CAM data is passed to the
-LLM ingestion pipeline. A production deployment would require a masking layer
-to redact or tokenise sensitive fields before LLM processing.
+A purpose-built anonymisation mechanism is applied before any LLM call. Known
+gaps in the current implementation:
+
+**Freeform text cells.** The anonymisation covers structured columns and
+recognised table layouts. Entity names appearing in freeform text cells (e.g.
+notes fields or narrative paragraphs) are not covered. A production deployment
+would require a more comprehensive approach over all cell content.
+
+**User responsibility on PII confirmation.** Company Name fields, CIN, and PAN
+are detected on upload and flagged to the underwriter before any LLM call.
+However, the system cannot verify that the underwriter actually removed flagged
+fields before confirming. A production deployment would require server-side
+enforcement.
+
+**Horizontal layout gap.** Certain multi-column horizontal table layouts are
+not covered by the current implementation. Deferred to v1.
+
+## Court Search — Best-Effort Only
+
+Court and tribunal record searches are performed via Tavily general web search.
+This is not a dedicated legal API and does not provide structured access to
+NCLT, DRT, or other tribunal databases. A production deployment would require
+integration with a dedicated legal records API.
+
+## No Authentication Layer
+
+The application has no authentication layer. Any user with network access can
+upload a CAM and run the workflow. A production deployment requires role-based
+access control tied to the lending system's identity management.
+
+## No System Integration
+
+The workflow is initiated manually by the underwriter. There is no automated
+trigger from the lending system's scoring engine. Integration is planned for v1.
+
+## Production Deployment — Local Only for Evaluation
+
+The application processes sensitive financial data subject to RBI data
+localisation requirements and DPDP Act 2023. US-based hosting platforms
+(Railway, Render, HuggingFace Spaces) are not compliant for production use.
+The application runs locally on the underwriter's machine for evaluation
+purposes. This is a deliberate design decision, not a gap.
 
 ---
 

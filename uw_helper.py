@@ -9,6 +9,8 @@ from datetime import datetime, date
 
 from data_ingestor import DataIngestor
 from agents import Analyst, Researcher, researcher_tools, State, Trend, Query, Severity, QueryCategory
+from docx_generator import generate_docx
+from pdf_generator import generate_pdf
 
 load_dotenv(override=True)
 TODAY = datetime.now().strftime("%d-%m-%Y")
@@ -57,23 +59,70 @@ class UWHelper:
 
 
     def human_input(self, state):
-            # Graph resumes here after interrupt
-            # company_name and cin have been injected into state 
-            # by the Gradio interface before resuming
-            
+        """
+        Graph resumes here after interrupt.
+        company_name and cin have been injected into state by the Gradio
+        interface before resuming via graph.update_state().
+
+        Restoration of real entity names from placeholders happens here —
+        director_names and related_companies are restored before the
+        Researcher runs. entity_mapping is real_name -> placeholder
+        (built by DataIngestor); reverse is placeholder -> real_name.
+        """
+        entity_mapping = state.get("entity_mapping") or {}
+        if not entity_mapping:
             return {}
+
+        reverse_mapping = {placeholder: real_name for real_name, placeholder in entity_mapping.items()}
+
+        director_names = state.get("director_names") or []
+        related_companies = state.get("related_companies") or []
+
+        return {
+            "director_names": [reverse_mapping.get(name, name) for name in director_names],
+            "related_companies": [reverse_mapping.get(name, name) for name in related_companies]
+        }
 
     def make_thread_id(self) -> str:
         return str(uuid.uuid4())
   
 
-    def format_trends_for_display(self, trends: List[Trend]) -> List[List]:
-        """Convert trends from state to dataframe rows"""
-        return [[t.observation, t.supporting_data, t.severity.value] for t in trends]
+    def format_trends_for_display(self, trends: List[Trend], entity_mapping: dict = None) -> List[List]:
+        """Convert trends from state to dataframe rows.
+        Applies reverse entity mapping so the human sees real names at Step 2,
+        not PERSON_N / ENTITY_N placeholders.
+        """
+        reverse = {v: k for k, v in (entity_mapping or {}).items()}
 
-    def format_queries_for_display(self, queries: List[Query]) -> List[List]:
-        """Convert queries from state to dataframe rows"""
-        return [[q.question, q.category.value] for q in queries]
+        def restore(text: str) -> str:
+            if not reverse or not isinstance(text, str):
+                return text
+            for placeholder, real_name in reverse.items():
+                text = text.replace(placeholder, real_name)
+            return text
+
+        return [
+            [restore(t.observation), restore(t.supporting_data), t.severity.value]
+            for t in trends
+        ]
+
+    def format_queries_for_display(self, queries: List[Query], entity_mapping: dict = None) -> List[List]:
+        """Convert queries from state to dataframe rows.
+        Applies reverse entity mapping so the human sees real names at Step 2.
+        """
+        reverse = {v: k for k, v in (entity_mapping or {}).items()}
+
+        def restore(text: str) -> str:
+            if not reverse or not isinstance(text, str):
+                return text
+            for placeholder, real_name in reverse.items():
+                text = text.replace(placeholder, real_name)
+            return text
+
+        return [
+            [restore(q.question), q.category.value]
+            for q in queries
+        ]
 
     def parse_trends_from_display(self, rows: List[List]) -> List[Trend]:
         """Convert edited dataframe rows back to Trend objects"""
@@ -100,7 +149,9 @@ class UWHelper:
 
 
     async def run_agent1_step(self, excel_file, trigger_type, thread_id):
-        """Step 1 — run ingestion and analyst"""
+        """Step 1 — run ingestion and analyst.
+        PII detection happens at upload time (scan_pii in app.py) before this is called.
+        """
 
         config = {"configurable": {"thread_id": thread_id}}
 
@@ -114,7 +165,9 @@ class UWHelper:
             "cin": None,
             "director_names": None,
             "related_companies": None,
-            "go_nogo": None
+            "go_nogo": None,
+            "entity_mapping": None,
+            "pii_warnings": None
         }
 
         # Run graph — will pause at human_input interrupt
@@ -124,9 +177,10 @@ class UWHelper:
         checkpointed = self.graph.get_state(config)
         trends = checkpointed.values["trends"]
         queries = checkpointed.values["queries"]
+        entity_mapping = checkpointed.values.get("entity_mapping") or {}
 
-        trends_display = self.format_trends_for_display(trends)
-        queries_display = self.format_queries_for_display(queries)
+        trends_display = self.format_trends_for_display(trends, entity_mapping)
+        queries_display = self.format_queries_for_display(queries, entity_mapping)
 
         return trends_display, queries_display
 
@@ -140,7 +194,10 @@ class UWHelper:
         trends = self.parse_trends_from_display(trends_data.values.tolist())
         queries = self.parse_queries_from_display(queries_data.values.tolist())
 
-        # Inject all inputs into checkpointed state before resuming
+        # Inject all inputs into checkpointed state before resuming.
+        # human_input node handles placeholder restoration on resume —
+        # director_names and related_companies will have real names
+        # before researcher runs.
         self.graph.update_state(config, {
             "company_name": company_name,
             "cin": cin,
@@ -156,3 +213,42 @@ class UWHelper:
         go_nogo = result["go_nogo"].value.upper()
 
         return brief, go_nogo
+
+
+    def generate_brief_docx(
+        self,
+        brief: str,
+        go_nogo: str,
+        company_name: str,
+        trigger_type: str,
+    ) -> str:
+        """
+        Generate a DOCX intelligence brief and return the file path.
+        Called by the Gradio download button handler in app.py.
+        """
+        return generate_docx(
+            brief=brief,
+            go_nogo=go_nogo,
+            company_name=company_name,
+            trigger_type=trigger_type,
+        )
+
+
+    def generate_brief_pdf(
+        self,
+        brief: str,
+        go_nogo: str,
+        company_name: str,
+        trigger_type: str,
+    ) -> str:
+        """
+        Generate a PDF intelligence brief and return the file path.
+        Requires LibreOffice to be installed.
+        Called by the Gradio download button handler in app.py.
+        """
+        return generate_pdf(
+            brief=brief,
+            go_nogo=go_nogo,
+            company_name=company_name,
+            trigger_type=trigger_type,
+        )

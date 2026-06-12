@@ -1,9 +1,9 @@
 # Design Document
 ## Agentic Override Decision Support System — MSME Lending
 
-**Version:** 0.4 — Post First End-to-End Run
+**Version:** 0.5 — Privacy Boundary Layer Added
 **Author:** Asiman K. Panda
-**Date:** May 17, 2026
+**Date:** June 2026
 **Stack:** LangGraph · Claude Sonnet/Haiku (Ingestion + Analyst) · GPT-4o (Researcher) · Tavily · Python · Gradio
 
 ---
@@ -53,37 +53,25 @@ workflow as a consistent diligence step regardless of score.
 
 The workflow is a diligence tool, not just a remediation tool.
 
-### Inputs — Two Stages
+### Inputs
 
-**Stage 1 Inputs — Anonymised (fed to Ingestion Layer and Analyst)**
-No company name. No CIN. No PAN. No PII of any kind.
+The workflow takes two categories of input at different points:
 
-- Credit Assessment Memo (CAM) workbook uploaded via Gradio interface
-- Structured fields extracted and classified by the ingestion layer before
-  the Analyst runs
+- **CAM workbook** — structured Excel format only (PDF financial statements,
+  scanned documents, and bank statements in document form are not supported in
+  v0.5). Provided by the underwriter on upload. Processed through the privacy
+  boundary before any LLM call.
+- **Named entity inputs** — Company Name and CIN, provided by the underwriter
+  at the human review gate. Not shared with the Analyst under any condition.
+- **Analyst output** — confirmed trends list and query list, editable by the
+  underwriter before the Researcher runs.
 
 Note: CAM workbooks do not have a consistent sheet structure across cases.
-Sheet count, sheet names, and sheet content vary. The ingestion layer handles
-this variability — the Analyst always receives consistently categorised data
-regardless of the source workbook's structure.
+The ingestion layer handles this variability — the Analyst always receives
+consistently categorised data regardless of the source workbook's structure.
 
 Note: CAM workbooks already contain entity-level data including director names
 and related company information. No separate MCA21 lookup is required.
-
-**Stage 2 Inputs — Named Entity (fed to Researcher, after human review gate)**
-Provided by the underwriter at the handoff point:
-
-- Company Name
-- CIN (Corporate Identification Number)
-- Analyst output: confirmed trends list + query list (editable by underwriter)
-
-### Explicit Exclusions (Both Stages)
-
-- No raw financial documents or scanned statements passed to either component
-- No unstructured text from internal systems
-- No personal financial details of directors beyond what is publicly available
-- Company Name, CIN, and PAN never passed to Ingestion Layer or Analyst under
-  any condition
 
 ---
 
@@ -92,17 +80,19 @@ Provided by the underwriter at the handoff point:
 The system has three components:
 
 **Ingestion Layer**
-A deterministic pipeline with one LLM-assisted classification step. Haiku classifies
-sheet types; the rest is pure Python.
+A deterministic pipeline with one LLM-assisted classification step. Handles the
+privacy boundary before any LLM call — see Section 4. Haiku classifies sheet types;
+the rest is pure Python.
 
-**Analyst Agent (Agent 1)**
-A single structured Sonnet call that reasons over CAM data and produces structured
-output. Detects financial anomalies, interprets bureau signals, and extracts director
-names and related companies.
+**Analyst Node**
+A single structured Sonnet call that reasons over anonymised CAM data and produces
+structured output. Detects financial anomalies, interprets bureau signals, and
+generates trends and queries for the underwriter's review.
 
-**Researcher Agent (Agent 2)**
+**Researcher Agent**
 GPT-4o in a ReAct tool-calling loop with three external search tools. Has a loop,
-uses tools, decides its own exit condition.
+uses tools, decides its own exit condition. Receives real entity names after the
+human review gate.
 
 ---
 
@@ -112,23 +102,28 @@ uses tools, decides its own exit condition.
 
 Sits between the Gradio interface and the Analyst. Converts a variable-structure CAM
 workbook into consistently categorised, structured data that the Analyst can
-reason over reliably.
+reason over reliably — with no identifiable entity names present.
 
-### Two-Step Process
+### Privacy Handling
 
-**Step 1 — Sample All Sheets**
-Read all sheets in the workbook. For each sheet, extract:
-- Column names
-- Row count
-- 15-row preview
+CAM workbooks contain sensitive borrower data. A purpose-built anonymisation
+mechanism ensures the financial analysis layer and the external research layer
+operate with appropriate data separation — details available in a walkthrough.
 
-**Step 2 — LLM-Assisted Sheet Classification (Haiku)**
-Pass sheet metadata to Haiku. Haiku classifies each sheet into one of seven
-categories: `financial_statements`, `bureau_data`, `banking`, `emi_table`,
-`debtor_creditor`, `scoring`, `irrelevant`. Classification is based on sheet
-column names and a 15-row preview sample.
+**Pre-upload PII screening.** On file upload, all sheets are scanned for Company
+Name fields, CIN, and PAN before any LLM call. Any hits are surfaced to the
+underwriter with exact cell references. The workflow cannot proceed past this
+gate until the underwriter responds.
 
-**Step 3 — Full Ingestion of Relevant Sheets Only**
+### Ingestion Process
+
+**Step 1 — Sheet Classification (Haiku)**
+Sheet metadata (column names and 15-row preview) passed to Haiku. Haiku classifies
+each sheet into one of seven categories: `financial_statements`, `bureau_data`,
+`banking`, `emi_table`, `debtor_creditor`, `scoring`, `irrelevant`. Classification
+operates on data that has already passed through the privacy handling step.
+
+**Step 2 — Full Ingestion of Relevant Sheets Only**
 Read complete data from all relevant sheets. Drop fully empty rows and columns.
 Serialize all datetime objects to ISO format strings before storing.
 
@@ -138,7 +133,7 @@ Serialize all datetime objects to ISO format strings before storing.
 cran_data = {
     "Sheet Name As In Workbook": {
         "category": "financial_statements",
-        "data": [...]  # full records as list of dicts
+        "data": [...]  # full records as list of dicts, named entities handled
     },
     ...
 }
@@ -148,10 +143,12 @@ cran_data = {
 
 `DataIngestor` class in `data_ingestor.py`. Key methods:
 - `classify_sheets_with_llm()` — Haiku classification call
-- `serialize_value()`, `serialize_key()`, `serialize_records()` — datetime
-  serialization helpers
 - `excel_ingestor()` — LangGraph node function, reads state, returns
   `{"cran_data": cran_data}`
+- `serialize_value()`, `serialize_key()`, `serialize_records()` — datetime
+  serialization helpers
+- `read_raw_sheets()`, `detect_pii_raw()` — pre-upload PII scan (called from
+  Gradio upload event, not from the graph)
 
 ---
 
@@ -239,6 +236,7 @@ class State(TypedDict):
     director_names: Optional[List[str]]
     related_companies: Optional[List[str]]
     go_nogo: Optional[GoNoGo]
+    pii_warnings: Optional[List[str]]
 ```
 
 ### How State Builds Up
@@ -246,10 +244,11 @@ class State(TypedDict):
 | Stage | Fields populated |
 |---|---|
 | Start | `excel_path` |
-| After ingestion | `cran_data` |
+| Pre-upload (PII scan) | `pii_warnings` — shown in UI before graph starts |
+| After ingestion | `cran_data` — privacy boundary enforced before any LLM call |
 | After Analyst | `trends`, `queries`, `director_names`, `related_companies` |
-| After human review gate | `company_name`, `cin` (via `graph.update_state()`), plus updated `trends` and `queries` if underwriter edited tables |
-| After Researcher | `messages` (full research history), `go_nogo` |
+| After human review gate | `company_name`, `cin`, updated `trends` and `queries` |
+| After Researcher | `messages`, `go_nogo` |
 
 ---
 
@@ -282,9 +281,9 @@ graph = gbuilder.compile(
 
 | Node | Responsibility |
 |---|---|
-| `excel_ingestor` | Sample all sheets, classify via Haiku, ingest relevant sheets fully, serialize datetimes |
-| `analyst` | Detect financial anomalies, interpret bureau signals, extract director names and related companies, generate trends and queries |
-| `human_input` | Interrupt point — underwriter reviews and edits Analyst Agent output, provides Company Name + CIN via Gradio before graph resumes |
+| `excel_ingestor` | Privacy handling, sheet classification via Haiku, full ingestion of relevant sheets, datetime serialization |
+| `analyst` | Detect financial anomalies, interpret bureau signals, generate trends and queries |
+| `human_input` | Interrupt point — underwriter reviews and edits Analyst output, provides Company Name + CIN via Gradio before graph resumes. Privacy boundary handoff on resume. |
 | `researcher` | External research via tool-calling loop, query resolution, go/no-go decision |
 | `tools` | ToolNode executing Researcher's three external tools |
 
@@ -303,25 +302,29 @@ The researcher prompt pre-generates a structured checklist covering:
 - Each director individually: news search, court search
 - Each related/group company individually: news search, court search
 
-Director names and related companies are extracted by the Analyst from CAM
-data and stored in State — available to the Researcher without any additional
-lookup tool.
+Director names and related companies are extracted by the Analyst from anonymised
+CAM data and stored in State. Real names are restored before the Researcher runs —
+available for external search without any additional lookup tool.
 
 ---
 
 ## 8. User Interface — Gradio
 
-**Framework:** Gradio 6.0
-**Layout:** Single scrolling page, four sections with progressive disclosure
+**Framework:** Gradio 6.14.0
+**Layout:** Single scrolling page, four accordion sections with progressive disclosure
 **Purpose:** Structured workflow interface — not a general chatbot
 
 ### Four Workflow Steps
 
 **Step 1 — Intake**
-Underwriter uploads CAM workbook via `gr.File` component. Selects
-trigger type (Below Threshold / Anomaly Flagged / Standard Diligence).
-Clicks Run Analysis. Button disables and shows "Running analysis..." while
-Agent 1 runs.
+Underwriter uploads CAM Excel workbook via `gr.File` component. On upload, a
+PII scan fires automatically before any LLM call. Any hits are displayed with
+exact cell references. The underwriter must respond to a Proceed / Abort gate
+— Run Analysis is disabled until this is resolved.
+
+After the PII gate, the underwriter selects trigger type (Below Threshold /
+Anomaly Flagged / Standard Diligence) and clicks Run Analysis. Button disables
+and shows "Running analysis..." while Agent 1 runs.
 
 **Step 2 — Analyst Output Review**
 Interface displays:
@@ -341,7 +344,8 @@ Button disables and shows "Running external research..." while Agent 2 runs.
 **Step 4 — Intelligence Brief Delivery**
 Recommended stance displayed in a dedicated field (GO / NOGO / NEEDS FURTHER
 RESEARCH). Full intelligence brief displayed in a scrollable text area.
-Start New Case button resets the interface and generates a new thread ID.
+Download DOCX and Download PDF buttons. Start New Case button resets the
+interface and generates a new thread ID.
 
 ### Thread Management
 
@@ -387,14 +391,18 @@ This line is parsed by `extract_go_nogo()` to populate `state["go_nogo"]`.
 
 ### Architectural Guardrails *(implemented in code)*
 
-- Multi-model routing — Haiku for classification, Sonnet for reasoning and synthesis,
-  GPT-4o for external research ReAct loop
-- Privacy boundary — Company Name, CIN, and PAN never passed to Ingestion Layer or
-  Analyst under any condition; enforced at state design level
+- Multi-model routing — Haiku for classification, Sonnet for reasoning and
+  synthesis, GPT-4o for external research ReAct loop
+- Privacy boundary — a purpose-built anonymisation mechanism ensures appropriate
+  data separation across the workflow before any LLM call. Full detail in Section 4.
+- interrupt_before=["human_input"] — graph cannot proceed to Researcher without
+  explicit underwriter input; human is structurally in the loop, not optionally
+- extract_go_nogo() hardened — 11-case test suite, three NEEDSMORE variants,
+  non-string content guard, silent default logging
+- No native code execution tool — purely token-based billing, no sandbox required
 - Datetime serialization in ingestion layer prevents JSON encoding errors downstream
 - Gradio yield pattern prevents double-clicking and provides underwriter feedback
   during long-running LLM calls
-- No native code execution tool — purely token-based billing, no sandbox required
 
 ### Operational Guardrails *(set externally)*
 
@@ -416,32 +424,52 @@ committee — reads the output brief and says:
 
 ---
 
-## 12. Known Limitations and Roadmap
+## 12. Evaluation
 
-| Limitation | Current State | Roadmap |
+| Level | Scope | Status |
 |---|---|---|
-| MCA21 / entity data | Third-party populated CAM | Adequate for v1; revisit if CAM coverage gaps found |
-| Court record search | Tavily best-effort | Dedicated legal data API (eCourts, NCLT direct) |
-| Variable CAM structure | Handled via LLM classification | Formalise CAM schema company-wide |
-| No audit trail | Not built | Logging layer + case ID linkage |
-| No system integration | Standalone Gradio app | API wrapper for lending system |
-| Automated trigger | Manual initiation only | Integration with scoring engine to trigger workflow automatically when threshold conditions are met |
-| No auth | Not built | Standard API auth layer |
-| Analyst loop | Single pass, no self-critique | Self-critique loop in v1 |
-| Underwriter feedback | No re-run capability | Feedback loop to Analyst in v1 |
-| PDF export | Not built | v1 feature |
-| Excel ingestion | Haiku-classified | Formalise if CAM structure standardised |
-| go_nogo parsing | String matching on final brief | Verify exact string format in GPT-4o output |
-| Eval framework | Not yet built | Separate eval harness — three-layer rubric covering sheet classification accuracy (ingestion), anomaly recall and entity extraction (Analyst), search agenda coverage, query resolution rate, and brief completeness and defensibility (Researcher); requires semi-synthetic CAMs with known ground truth |
+| Level 1 — Ingestion | Sheet classification | Complete |
+| Level 2 — Analyst | Output quality | Complete |
+| Level 3 — Researcher | Search coverage and brief quality | Complete |
+
+See [eval/EVAL_LOG.md](eval/EVAL_LOG.md) for methodology and results.
 
 ---
 
-## 13. V1 Features
+## 13. Known Limitations and Roadmap
+
+| Limitation | Current State | Roadmap |
+|---|---|---|
+| PII gate — user responsibility | Pre-upload scan flags CIN, PAN, Company Name with cell references and requires confirmation. Cannot verify user actually stripped flagged fields before confirming. | Server-side enforcement — programmatic stripping before ingestion |
+| Tavily — named entity transmission | Director names and company names sent to US-based Tavily API as search queries | Data processing agreement + PII minimisation; assess against DPDP Act 2023 |
+| Data residency | Public Anthropic and OpenAI API endpoints — data routed outside India | On-premise or India-region cloud endpoints (AWS Mumbai, Azure Central India) |
+| No persistent audit trail | MemorySaver in-memory only — no audit log across sessions | Persistent audit trail with case ID linkage |
+| Court record search | Tavily best-effort | Dedicated legal data API (eCourts, NCLT direct) |
+| Variable CAM structure | Handled via LLM classification | Formalise CAM schema company-wide |
+| No system integration | Standalone Gradio app | API wrapper for lending system |
+| No auth | Not built | Standard API auth layer |
+| Analyst loop | Single pass, no self-critique | Self-critique loop in v1 |
+| Underwriter feedback | No re-run capability | Feedback loop to Analyst in v1 |
+| go_nogo parsing | Hardened — 11-case test suite passing | Stable |
+| PDF export | Complete (LibreOffice headless) | Stable |
+| Deployment | Local only — data residency requirement | AWS Mumbai / Azure Central India / on-premise |
+
+---
+
+## 14. V1 Features
 
 - **Self-critique loop** — Analyst + Analyst Critic nodes with autonomous exit
   condition based on output quality
 - **Underwriter feedback loop** — conditional edge from `human_input` back
   to `analyst` if underwriter requests revision before proceeding to research
-- **PDF export** of intelligence brief
-- **Audit trail** — case ID, run timestamp, data sources used, logged per run
+- **Multi-column entity layout** — extend anonymisation to handle horizontal
+  key-value sheets where one label maps to multiple values in adjacent columns
+- **Persistent audit trail** — case ID, run timestamp, data sources used,
+  logged per run (replace MemorySaver with SQLite checkpointer)
 - **Max retries** hardcoded on researcher tool-calling loop
+- **Automated trigger** — integration with lending system scoring engine;
+  workflow fires automatically when a case scores below threshold
+- **LLM-as-judge for brief defensibility** — brief quality scoring is currently
+  done manually in eval. V1 formalises this as an automated judge call built into
+  the eval harness, with a domain-specific prompt calibrated for MSME lending
+  defensibility criteria
