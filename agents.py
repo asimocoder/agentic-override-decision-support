@@ -81,12 +81,13 @@ class Analyst:
             data_sections += json.dumps(data, indent=2)
         
         # SYSTEM PROMPT REDACTED
-        # Analyst system prompt instructs the LLM to perform financial anomaly detection
-        # and bureau signal interpretation over CRAN data, and extract director names
-        # and related companies for downstream research. Loaded from config in production.
+        # The Analyst system prompt instructs the model to perform financial anomaly
+        # detection and bureau signal interpretation over categorised CRAN data,
+        # and to extract director names and related companies for downstream research.
+        # In production this is loaded from a config file not included in this repo.
         system_message = ""
 
-                user_message = f"""Here is the CRAN data:\n{data_sections}"""
+        user_message = f"""Here is the CRAN data:\n{data_sections}"""
 
         messages = [
             SystemMessage(content=system_message),
@@ -179,13 +180,13 @@ class Researcher:
                 search_agenda += f"  [ ] Court search: litigation, NCLT, DRT, enforcement actions for {company}\n"
 
         # SYSTEM PROMPT REDACTED
-        # Researcher system prompt instructs the LLM to work through the search agenda
-        # systematically, resolve online-resolvable queries, and produce a structured
-        # intelligence brief ending with a parseable RECOMMENDED STANCE line.
-        # Loaded from config in production.
+        # The Researcher system prompt instructs the model to work through the search
+        # agenda systematically, resolve online-resolvable queries, and produce a
+        # structured intelligence brief ending with a parseable RECOMMENDED STANCE line.
+        # In production this is loaded from a config file not included in this repo.
         system_message = ""
 
-                user_message = f"""SEARCH AGENDA — complete every item before synthesising:
+        user_message = f"""SEARCH AGENDA — complete every item before synthesising:
         {search_agenda}
 
         FINANCIAL ANOMALIES FLAGGED BY ANALYST:

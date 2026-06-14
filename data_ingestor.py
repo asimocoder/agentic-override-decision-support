@@ -48,8 +48,10 @@ class DataIngestor:
     
     def classify_sheets_with_llm(self, sheet_samples) -> Dict:
         # SYSTEM PROMPT REDACTED
-        # Classification prompt instructs the LLM to assign each sheet to one of the
-        # seven categories defined in SheetClassification. Loaded from config in production.
+        # The sheet classification prompt instructs the model to assign each sheet to
+        # one of the seven categories defined in SheetClassification, based on column
+        # names and preview data from the uploaded CAM workbook.
+        # In production this is loaded from a config file not included in this repo.
         system_message = ""
 
         user_message = f"""Here are the sheet samples:\n {sheet_samples}\n"""
